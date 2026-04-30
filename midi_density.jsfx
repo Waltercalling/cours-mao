@@ -1,0 +1,486 @@
+desc:MIDI Density
+tags:MIDI filter random range
+author:Fabien Fouet & Aria (IA)
+// cours-mao.fr
+// Plugin MIDI : filtre aléatoire de notes avec plage de jeu
+// Développé par Fabien Fouet (cours-mao.fr) & Aria (assistant IA)
+
+slider1:100<0,100,0.1>-Density (%)
+slider2:0<0,127,1>-Note Basse
+slider3:127<0,127,1>-Note Haute
+slider4:8<0,9,1>-Color Index
+slider5:0<0,1,1>-Mini View
+
+// -------------------------------------------------------
+// Fonctions dans le premier @gfx — règle EEL2
+// Base de référence : 420 × 260  (compact : 420 × 130)
+// Mémoire :
+//   blocked  0..127
+//   rel      256..383   (decay illumination)
+//   pal      400..429   (palette 10×3)
+//   kb_xl    500..627   (bord gauche note, fraction 0-1)
+//   kb_xr    700..827   (bord droit  note, fraction 0-1)
+// -------------------------------------------------------
+@gfx 420 260
+
+function note_to_str(note) globals(#note_buf) local(idx, oct) (
+  idx=note%12|0; oct=(note/12|0)-2;
+  idx== 0?sprintf(#note_buf,"C%d",  oct):idx== 1?sprintf(#note_buf,"C#%d",oct):
+  idx== 2?sprintf(#note_buf,"D%d",  oct):idx== 3?sprintf(#note_buf,"D#%d",oct):
+  idx== 4?sprintf(#note_buf,"E%d",  oct):idx== 5?sprintf(#note_buf,"F%d",  oct):
+  idx== 6?sprintf(#note_buf,"F#%d", oct):idx== 7?sprintf(#note_buf,"G%d",  oct):
+  idx== 8?sprintf(#note_buf,"G#%d", oct):idx== 9?sprintf(#note_buf,"A%d",  oct):
+  idx==10?sprintf(#note_buf,"A#%d", oct):sprintf(#note_buf,"B%d",oct);
+);
+
+@init
+  i=0; loop(128, blocked[i]=0; rel[256+i]=0; i+=1;);
+  notes_in=0; notes_out=0; notes_blocked=0;
+  dragging=0; drag_range=0;
+  col_idx=8; prev_cap=0;
+
+  // Palette 10 couleurs × 3 (r,g,b)
+  pal[400]=0.20;pal[401]=0.50;pal[402]=1.00; // 0 Bleu
+  pal[403]=0.65;pal[404]=0.20;pal[405]=1.00; // 1 Violet
+  pal[406]=0.00;pal[407]=0.80;pal[408]=0.75; // 2 Teal
+  pal[409]=0.20;pal[410]=0.85;pal[411]=0.30; // 3 Vert
+  pal[412]=1.00;pal[413]=0.50;pal[414]=0.10; // 4 Orange
+  pal[415]=1.00;pal[416]=0.20;pal[417]=0.65; // 5 Rose
+  pal[418]=0.95;pal[419]=0.15;pal[420]=0.15; // 6 Rouge
+  pal[421]=1.00;pal[422]=0.90;pal[423]=0.10; // 7 Jaune
+  pal[424]=0.94;pal[425]=0.94;pal[426]=0.96; // 8 Blanc (carré blanc)
+  pal[427]=0.06;pal[428]=0.06;pal[429]=0.08; // 9 Noir  (carré noir)
+
+  // Bords gauche/droit de chaque note (fraction 0.0-1.0)
+  bkr=0.28/75.0;
+  n=0; wi=0;
+  loop(128,
+    mod=n%12;
+    (mod==0||mod==2||mod==4||mod==5||mod==7||mod==9||mod==11)?(
+      kb_xl[500+n]=wi/75.0; kb_xr[700+n]=(wi+1)/75.0; wi+=1;
+    ):(
+      kb_xl[500+n]=wi/75.0-bkr; kb_xr[700+n]=wi/75.0+bkr;
+    );
+    n+=1;
+  );
+
+@slider
+  density=slider1/100.0;
+  col_idx=max(0,min(9,slider4|0));
+
+@block
+  while (midirecv(offset,msg1,msg2,msg3)) (
+    status=msg1&0xF0; note=msg2; vel=msg3;
+    (status==0x90&&vel>0)?(
+      rel[256+note]=1.0;
+      notes_in+=1;
+      in_range=(note>=(slider2|0))&&(note<=(slider3|0));
+      !in_range||rand(1.0)<density?(
+        midisend(offset,msg1,msg2,msg3);
+        blocked[note]=0; notes_out+=1;
+      ):(blocked[note]=1; notes_blocked+=1;);
+    ):
+    (status==0x80||(status==0x90&&vel==0))?(
+      blocked[note]==0?midisend(offset,msg1,msg2,msg3):(blocked[note]=0);
+    ):
+    midisend(offset,msg1,msg2,msg3);
+  );
+
+@gfx
+
+  sx=gfx_w/420.0; sy=gfx_h/260.0; s=sy; pad=10*sx;
+
+  col_idx=max(0,min(9,slider4|0));
+  is_bw =(col_idx==8);
+  is_inv=(col_idx==9);
+  mini  =(slider5|0)==1;
+
+  cr=pal[400+col_idx*3]; cg=pal[401+col_idx*3]; cb=pal[402+col_idx*3];
+  // Illum : gris clair en mode Noir pour que les notes restent visibles
+  // Mode Noir : gris moyen visible sur touches noires
+  is_inv?(ill_r=0.62;ill_g=0.62;ill_b=0.72;):(ill_r=cr;ill_g=cg;ill_b=cb;);
+
+  // Couleurs contextuelles
+  // Mode Blanc (8) : fond clair   Mode Noir (9) : fond quasi-noir
+  // Tous les autres : fond sombre standard
+  is_bw?(
+    bg_r=0.90;bg_g=0.90;bg_b=0.92;
+    tx_r=0.10;tx_g=0.10;tx_b=0.15;
+  ):is_inv?(
+    bg_r=0.04;bg_g=0.04;bg_b=0.05;
+    tx_r=0.90;tx_g=0.90;tx_b=1.00;
+  ):(
+    bg_r=0.05;bg_g=0.05;bg_b=0.06;
+    tx_r=0.90;tx_g=0.90;tx_b=1.00;
+  );
+
+  click=(mouse_cap&1)&&!(prev_cap&1); prev_cap=mouse_cap;
+  i=0; loop(128, rel[256+i]>0?rel[256+i]=max(0,rel[256+i]-0.04); i+=1;);
+
+  // FOND
+  gfx_r=bg_r;gfx_g=bg_g;gfx_b=bg_b;gfx_a=1;
+  gfx_rect(0,0,gfx_w,gfx_h);
+
+  fs_title  =max(10,(20*s)|0);
+  fs_ver    =max(6, (10*s)|0);
+  fs_section=max(8, (13*s)|0);
+  fs_value  =max(7, (12*s)|0);
+  fs_ctr    =max(6, (10*s)|0);
+  fs_info   =max(5,  (8*s)|0);
+
+  // ── TITRE + VERSION ────────────────────────────────────────
+  gfx_setfont(1,"Arial",fs_title,'b');
+  gfx_measurestr("MIDI Density",tw,th);
+  gfx_setfont(1,"Arial",fs_ver,0);
+  gfx_measurestr("v1.02",vw,vh);
+  bx=gfx_w-pad-tw-5*sx-vw;
+
+  gfx_setfont(1,"Arial",fs_title,'b');
+  gfx_r=tx_r;gfx_g=tx_g;gfx_b=tx_b;gfx_a=1;
+  gfx_x=bx;gfx_y=8*sy; gfx_drawstr("MIDI Density");
+  gfx_setfont(1,"Arial",fs_ver,0);
+  gfx_r=tx_r*0.5+0.15;gfx_g=tx_g*0.5+0.15;gfx_b=tx_b*0.5+0.20;gfx_a=1;
+  gfx_x=bx+tw+5*sx;gfx_y=8*sy+th-vh; gfx_drawstr("v1.02");
+
+  // ── BARRE DENSITY ──────────────────────────────────────────
+  bar_x=pad; bar_y=50*sy; bar_w=gfx_w-2*pad; bar_h=max(6,(13*s)|0);
+
+  gfx_setfont(1,"Arial",fs_section,'b');
+  // BW=foncé, INV=clair, autres=accent
+  is_bw ?(gfx_r=0.12;gfx_g=0.12;gfx_b=0.18;):
+  is_inv?(gfx_r=0.80;gfx_g=0.80;gfx_b=0.88;):
+         (gfx_r=cr*0.6+0.4;gfx_g=cg*0.6+0.4;gfx_b=cb*0.6+0.4;);gfx_a=1;
+  gfx_x=bar_x;gfx_y=bar_y-fs_section-3*sy; gfx_drawstr("Density");
+
+  over_bar=(mouse_x>=bar_x&&mouse_x<=bar_x+bar_w&&mouse_y>=bar_y&&mouse_y<=bar_y+bar_h);
+  (mouse_cap&1)&&drag_range==0&&(over_bar||dragging)?(
+    dragging=1;
+    slider1=max(0,min(100,(mouse_x-bar_x)/bar_w*100.0));
+    slider_automate(1); density=slider1/100.0;
+  ):(dragging=(mouse_cap&1)&&dragging?1:0);
+
+  is_bw ?(gfx_r=0.75;gfx_g=0.75;gfx_b=0.80;):
+  is_inv?(gfx_r=0.22;gfx_g=0.22;gfx_b=0.30;):
+         (gfx_r=0.12;gfx_g=0.12;gfx_b=0.20;);gfx_a=1;
+  gfx_rect(bar_x,bar_y,bar_w,bar_h);
+
+  fill_w=(bar_w-2)*density; bright=0.2+density*0.8;
+  is_bw ?(gfx_r=0.15*bright;gfx_g=0.15*bright;gfx_b=0.22*bright;):
+  is_inv?(gfx_r=0.55*bright;gfx_g=0.55*bright;gfx_b=0.65*bright;):
+         (gfx_r=cr*bright*0.55;gfx_g=cg*bright*0.55;gfx_b=cb*bright;);gfx_a=1;
+  fill_w>0?gfx_rect(bar_x+1,bar_y+1,fill_w,bar_h-2);
+
+  cur_x=bar_x+density*bar_w;
+  dhw=max(4,(6*s)|0); dhh=bar_h+6*sy;
+  is_bw ?(gfx_r=0.18;gfx_g=0.18;gfx_b=0.25;):
+  is_inv?(gfx_r=0.88;gfx_g=0.88;gfx_b=0.92;):
+         (gfx_r=1;gfx_g=1;gfx_b=1;);gfx_a=1;
+  gfx_rect(cur_x-dhw/2,bar_y-3*sy,dhw,dhh);
+
+  // % sous la poignée
+  gfx_setfont(1,"Arial",fs_value,'b');
+  sprintf(#pct_str,"%d%%",slider1|0);
+  gfx_measurestr(#pct_str,pct_w,pct_h);
+  is_bw ?(gfx_r=0.20;gfx_g=0.20;gfx_b=0.28;):
+  is_inv?(gfx_r=0.78;gfx_g=0.78;gfx_b=0.85;):
+         (gfx_r=cr*0.4+0.6;gfx_g=cg*0.4+0.6;gfx_b=cb*0.4+0.6;);gfx_a=1;
+  gfx_x=max(pad,min(gfx_w-pad-pct_w,cur_x-pct_w/2));
+  gfx_y=bar_y+dhh+sy;
+  gfx_drawstr(#pct_str);
+
+  // ── CLAVIER (uniquement si !mini) ──────────────────────────
+  mini?(
+    // MODE COMPACT : Note Range juste après Density
+    rbar_y=bar_y+dhh+pct_h+20*sy;
+  ):(
+    // MODE NORMAL : clavier entre les deux
+    // Triangle de repli à gauche de Note Range
+    tri_sz1=max(7,(10*s)|0);
+    tri_x1=pad; tri_y1=82*sy;
+    click&&mouse_x>=tri_x1&&mouse_x<=tri_x1+tri_sz1
+         &&mouse_y>=tri_y1&&mouse_y<=tri_y1+tri_sz1?(
+      slider5=mini?0:1; slider_automate(16);
+    );
+    is_bw ?(gfx_r=0.18;gfx_g=0.18;gfx_b=0.25;):
+    is_inv?(gfx_r=0.70;gfx_g=0.70;gfx_b=0.80;):
+           (gfx_r=cr*0.5+0.35;gfx_g=cg*0.5+0.35;gfx_b=cb*0.5+0.45;);gfx_a=1;
+    tri1_rows=max(3,(tri_sz1*0.65)|0);
+    tri1_col =max(2,(tri_sz1*0.65)|0);
+    tri1_ox=tri_x1+(tri_sz1-tri1_col)/2;
+    tri1_oy=tri_y1+(tri_sz1-tri1_rows)/2;
+    tri1_row=0;
+    loop(tri1_rows,
+      t_hw1=((tri1_rows-tri1_row)/tri1_rows)*tri1_col*0.5;
+      t_cx1=tri1_ox+tri1_col*0.5;
+      gfx_line(t_cx1-t_hw1,tri1_oy+tri1_row,t_cx1+t_hw1,tri1_oy+tri1_row);
+      tri1_row+=1;
+    );
+    gfx_setfont(1,"Arial",fs_section,'b');
+    is_bw ?(gfx_r=0.12;gfx_g=0.12;gfx_b=0.18;):
+    is_inv?(gfx_r=0.80;gfx_g=0.80;gfx_b=0.88;):
+           (gfx_r=cr*0.6+0.4;gfx_g=cg*0.6+0.4;gfx_b=cb*0.6+0.4;);gfx_a=1;
+    gfx_x=tri_x1+tri_sz1+4*sx;gfx_y=82*sy; gfx_drawstr("Note Range");
+
+    kb_x=pad; kb_y=97*sy; kb_w=gfx_w-2*pad;
+    kb_h=max(28,(48*s)|0); bkh=kb_h*0.62; bkw=max(2,(kb_w/75.0*0.56)|0);
+    sl2=slider2|0; sl3=slider3|0;
+
+    is_bw?(gfx_r=0.88;gfx_g=0.88;gfx_b=0.90;):(gfx_r=0.10;gfx_g=0.10;gfx_b=0.16;);gfx_a=1;
+    gfx_rect(kb_x,kb_y,kb_w,kb_h);
+
+    // PASSE 1 : blanches
+    kb_n=0; wi_g=0;
+    loop(128,
+      mod=kb_n%12;
+      (mod==0||mod==2||mod==4||mod==5||mod==7||mod==9||mod==11)?(
+        kx =kb_x+(wi_g*kb_w/75)|0;
+        kx2=kb_x+((wi_g+1)*kb_w/75)|0;
+        kw=kx2-kx; rv=rel[256+kb_n];
+
+        rv>0.01?(
+          gfx_r=0.80*(1-rv)+ill_r*rv; gfx_g=0.80*(1-rv)+ill_g*rv; gfx_b=0.88*(1-rv)+ill_b*rv;
+        ):(gfx_r=0.80;gfx_g=0.80;gfx_b=0.88;);
+        gfx_a=1; gfx_rect(kx,kb_y,kw-1,kb_h);
+
+        rv>0.01?(gfx_r=0.95;gfx_g=0.95;gfx_b=0.95;):
+        is_inv?(gfx_r=0.92;gfx_g=0.92;gfx_b=0.95;):(gfx_r=0.97;gfx_g=0.97;gfx_b=1.00;);
+        gfx_line(kx,kb_y,kx+kw-2,kb_y);
+        rv>0.01?(gfx_r=cr*0.6*rv;gfx_g=cg*0.6*rv;gfx_b=cb*0.6*rv;):(gfx_r=0.44;gfx_g=0.44;gfx_b=0.54;);
+        gfx_line(kx,kb_y+kb_h-1,kx+kw-2,kb_y+kb_h-1);
+        is_bw?(gfx_r=0.88;gfx_g=0.88;gfx_b=0.90;):(gfx_r=0.10;gfx_g=0.10;gfx_b=0.16;);gfx_a=1;
+        gfx_line(kx+kw-1,kb_y,kx+kw-1,kb_y+kb_h-1);
+        wi_g+=1;
+      );
+      kb_n+=1;
+    );
+
+    // OVERLAY zone active
+    lo_px=kb_x+kb_xl[500+sl2]*kb_w;
+    hi_px=kb_x+kb_xr[700+sl3]*kb_w;
+    hi_px-lo_px>0?(
+      // BW fond clair : overlay gris foncé bien visible sur blanc
+      // Tous les autres : overlay couleur accent
+      is_bw?(gfx_r=0.20;gfx_g=0.20;gfx_b=0.25;gfx_a=0.45;):
+            (gfx_r=cr;gfx_g=cg;gfx_b=cb;gfx_a=0.30;);
+      gfx_rect(lo_px,kb_y,hi_px-lo_px,kb_h);
+    );
+
+    // PASSE 2 : noires
+    kb_n=0; wi_g=0;
+    loop(128,
+      mod=kb_n%12;
+      (mod==0||mod==2||mod==4||mod==5||mod==7||mod==9||mod==11)?(wi_g+=1;):(
+        bkcx=kb_x+(wi_g*kb_w/75)|0; bkx=bkcx-bkw/2;
+        rv=rel[256+kb_n]; in_rng=kb_n>=sl2&&kb_n<=sl3;
+
+        // Noires : toujours noires — l'overlay montre la sélection
+        // Seule exception : illumination note jouée (rv>0)
+        rv>0.01?(
+          gfx_r=0.10*(1-rv)+ill_r*rv; gfx_g=0.10*(1-rv)+ill_g*rv; gfx_b=0.16*(1-rv)+ill_b*rv;
+        ):(gfx_r=0.07;gfx_g=0.07;gfx_b=0.12;);
+        gfx_a=1; gfx_rect(bkx,kb_y,bkw,bkh);
+
+        rv>0.01?(gfx_r=ill_r*0.9;gfx_g=ill_g*0.9;gfx_b=ill_b*0.9;):(gfx_r=0.22;gfx_g=0.22;gfx_b=0.32;);
+        gfx_line(bkx,kb_y,bkx+bkw-1,kb_y);
+        rv>0.01?(gfx_r=ill_r*0.7;gfx_g=ill_g*0.7;gfx_b=ill_b*0.7;):(gfx_r=0.14;gfx_g=0.14;gfx_b=0.22;);
+        gfx_line(bkx,kb_y,bkx,kb_y+bkh-1);
+      );
+      kb_n+=1;
+    );
+
+    // PASSE 3 : repères C
+    fs_c=max(5,(7*s)|0); gfx_setfont(1,"Arial",fs_c,0);
+    kb_n=0; wi_g=0;
+    loop(128,
+      mod=kb_n%12;
+      mod==0?(
+        cx=kb_x+(wi_g*kb_w/75)|0;
+        gfx_r=0.25;gfx_g=0.25;gfx_b=0.42;gfx_a=0.6;
+        gfx_line(cx,kb_y+bkh+1,cx,kb_y+kb_h-2);
+        kb_w/75>6?(
+          sprintf(#note_buf,"C%d",(kb_n/12|0)-2);
+          // Labels lisibles dans tous les modes
+          is_bw?(gfx_r=0.18;gfx_g=0.18;gfx_b=0.28;):(gfx_r=0.38;gfx_g=0.38;gfx_b=0.60;);gfx_a=1;
+          gfx_x=cx+1;gfx_y=kb_y+bkh+2; gfx_drawstr(#note_buf);
+        );
+      );
+      (mod==0||mod==2||mod==4||mod==5||mod==7||mod==9||mod==11)?wi_g+=1;
+      kb_n+=1;
+    );
+
+    rbar_y=kb_y+kb_h+15*sy;
+  );  // fin !mini
+
+  // ── BARRE NOTE RANGE ───────────────────────────────────────
+  // En mode mini : on affiche aussi le label "Note Range"
+  mini?(
+    // Triangle ▶ (clavier masqué) à gauche de Note Range
+    tri_sz1=max(7,(10*s)|0);
+    tri_x1=pad; tri_y1=rbar_y-fs_section-3*sy;
+    click&&mouse_x>=tri_x1&&mouse_x<=tri_x1+tri_sz1
+         &&mouse_y>=tri_y1&&mouse_y<=tri_y1+tri_sz1?(
+      slider5=0; slider_automate(16);
+    );
+    is_bw ?(gfx_r=0.18;gfx_g=0.18;gfx_b=0.25;):
+    is_inv?(gfx_r=0.70;gfx_g=0.70;gfx_b=0.80;):
+           (gfx_r=cr*0.5+0.35;gfx_g=cg*0.5+0.35;gfx_b=cb*0.5+0.45;);gfx_a=1;
+    tri1_rows=max(3,(tri_sz1*0.65)|0);
+    tri1_col =max(2,(tri_sz1*0.65)|0);
+    tri1_ox=tri_x1+(tri_sz1-tri1_col)/2;
+    tri1_oy=tri_y1+(tri_sz1-tri1_rows)/2;
+    tri1_row=0;
+    loop(tri1_rows,
+      half=tri1_rows/2;
+      t_x2=tri1_ox+(half-abs(tri1_row-half))/half*tri1_col;
+      gfx_line(tri1_ox,tri1_oy+tri1_row,t_x2,tri1_oy+tri1_row);
+      tri1_row+=1;
+    );
+    gfx_setfont(1,"Arial",fs_section,'b');
+    is_bw ?(gfx_r=0.12;gfx_g=0.12;gfx_b=0.18;):
+    is_inv?(gfx_r=0.80;gfx_g=0.80;gfx_b=0.88;):
+           (gfx_r=cr*0.6+0.4;gfx_g=cg*0.6+0.4;gfx_b=cb*0.6+0.4;);gfx_a=1;
+    gfx_x=tri_x1+tri_sz1+4*sx;gfx_y=rbar_y-fs_section-3*sy; gfx_drawstr("Note Range");
+  );
+
+  sl2=slider2|0; sl3=slider3|0;
+  rbar_x=pad; rbar_w=gfx_w-2*pad; rbar_h=max(6,(13*s)|0); hz=7*sx;
+
+  low_x =rbar_x+kb_xl[500+sl2]*rbar_w;
+  high_x=rbar_x+kb_xr[700+sl3]*rbar_w;
+
+  over_low =abs(mouse_x-low_x) <=hz&&mouse_y>=rbar_y&&mouse_y<=rbar_y+rbar_h;
+  over_high=abs(mouse_x-high_x)<=hz&&mouse_y>=rbar_y&&mouse_y<=rbar_y+rbar_h;
+
+  // Détection zone inter-handles (entre low et high)
+  over_mid = mouse_x>low_x+rhw/2 && mouse_x<high_x-rhw/2
+          && mouse_y>=rbar_y && mouse_y<=rbar_y+rbar_h;
+
+  (mouse_cap&1)&&dragging==0?(
+    drag_range==0?(
+      over_low&&over_high?(drag_range=(mouse_x-low_x)<=(high_x-mouse_x)?1:2):
+      over_low ?drag_range=1:
+      over_high?drag_range=2:
+      // Clic dans la zone entre les deux handles → drag intervalle
+      over_mid?(
+        drag_range=3;
+        ivl_anchor[900]=(mouse_x-rbar_x)/rbar_w;
+        ivl_sl2[901]=slider2|0;
+        ivl_sl3[902]=slider3|0;
+      );
+    );
+    frac=(mouse_x-rbar_x)/rbar_w; frac=max(0,min(1,frac));
+    drag_range==1||drag_range==2?(
+      // Snap individuel d'un handle
+      best_n=0; best_d=999;
+      nn=0; loop(128,
+        ctr=(kb_xl[500+nn]+kb_xr[700+nn])*0.5;
+        dd=abs(ctr-frac);
+        dd<best_d?(best_d=dd;best_n=nn;);
+        nn+=1;
+      );
+      drag_range==1?(
+        slider2=max(0,min(slider3|0,best_n)); slider_automate(2);
+      ):(
+        slider3=max(slider2|0,min(127,best_n)); slider_automate(4);
+      );
+    ):
+    drag_range==3?(
+      // Déplacer tout l'intervalle
+      ivl_size=(ivl_sl3[902]-ivl_sl2[901]);
+      delta_frac=frac-ivl_anchor[900];
+      // Trouver la note sl2 cible via snap
+      target_frac=(kb_xl[500+(ivl_sl2[901]|0)]+kb_xr[700+(ivl_sl2[901]|0)])*0.5 + delta_frac;
+      target_frac=max(0,min(1,target_frac));
+      best_n=0; best_d=999;
+      nn=0; loop(128,
+        ctr=(kb_xl[500+nn]+kb_xr[700+nn])*0.5;
+        dd=abs(ctr-target_frac);
+        dd<best_d?(best_d=dd;best_n=nn;);
+        nn+=1;
+      );
+      new_sl2=max(0,min(127-ivl_size,best_n));
+      new_sl3=new_sl2+ivl_size;
+      slider2=new_sl2; slider3=new_sl3;
+      slider_automate(2); slider_automate(4);
+    );
+  ):(drag_range=(mouse_cap&1)?drag_range:0);
+
+  sl2=slider2|0; sl3=slider3|0;
+  low_x =rbar_x+kb_xl[500+sl2]*rbar_w;
+  high_x=rbar_x+kb_xr[700+sl3]*rbar_w;
+
+  is_bw ?(gfx_r=0.75;gfx_g=0.75;gfx_b=0.80;):
+  is_inv?(gfx_r=0.22;gfx_g=0.22;gfx_b=0.30;):
+         (gfx_r=0.12;gfx_g=0.12;gfx_b=0.20;);gfx_a=1;
+  gfx_rect(rbar_x,rbar_y,rbar_w,rbar_h);
+
+  is_bw ?(gfx_r=0.28;gfx_g=0.28;gfx_b=0.35;):
+  is_inv?(gfx_r=0.55;gfx_g=0.55;gfx_b=0.65;):
+         (gfx_r=cr*0.45;gfx_g=cg*0.45;gfx_b=cb*0.85;);gfx_a=1;
+  high_x-low_x>0?gfx_rect(low_x,rbar_y+1,high_x-low_x,rbar_h-2);
+
+  is_bw ?(gfx_r=0.65;gfx_g=0.65;gfx_b=0.70;gfx_a=0.7;):
+  is_inv?(gfx_r=0.10;gfx_g=0.10;gfx_b=0.14;gfx_a=0.9;):
+         (gfx_r=0.06;gfx_g=0.06;gfx_b=0.10;gfx_a=0.8;);
+  low_x-rbar_x>0        ?gfx_rect(rbar_x,rbar_y+1,low_x-rbar_x,rbar_h-2);
+  rbar_x+rbar_w-high_x>0?gfx_rect(high_x,rbar_y+1,rbar_x+rbar_w-high_x,rbar_h-2);
+
+  rhw=max(4,(6*s)|0); rhh=rbar_h+6*sy;
+  is_bw ?(gfx_r=0.18;gfx_g=0.18;gfx_b=0.25;):
+  is_inv?(gfx_r=0.88;gfx_g=0.88;gfx_b=0.92;):
+         (gfx_r=1;gfx_g=1;gfx_b=1;);gfx_a=1;
+  gfx_rect(low_x -rhw/2,rbar_y-3*sy,rhw,rhh);
+  gfx_rect(high_x-rhw/2,rbar_y-3*sy,rhw,rhh);
+
+  // Noms de notes
+  gfx_setfont(1,"Arial",fs_value,'b');
+  is_bw ?(gfx_r=0.20;gfx_g=0.20;gfx_b=0.28;):
+  is_inv?(gfx_r=0.78;gfx_g=0.78;gfx_b=0.85;):
+         (gfx_r=cr*0.4+0.6;gfx_g=cg*0.4+0.6;gfx_b=cb*0.4+0.6;);gfx_a=1;
+  note_y=rbar_y+rbar_h+4*sy;
+
+  note_to_str(sl2);
+  gfx_measurestr(#note_buf,nw_lo,nh_lo);
+  gfx_x=max(pad,low_x-nw_lo/2);gfx_y=note_y; gfx_drawstr(#note_buf);
+  note_to_str(sl3);
+  gfx_measurestr(#note_buf,nw_hi,nh_hi);
+  gfx_x=min(gfx_w-pad-nw_hi,high_x-nw_hi/2);gfx_y=note_y; gfx_drawstr(#note_buf);
+
+  // ── COMPTEURS ──────────────────────────────────────────────
+  gfx_setfont(1,"Arial",fs_ctr,0);
+  is_bw ?(gfx_r=0.25;gfx_g=0.25;gfx_b=0.32;):
+  is_inv?(gfx_r=0.55;gfx_g=0.55;gfx_b=0.65;):
+         (gfx_r=cr*0.25+0.28;gfx_g=cg*0.25+0.28;gfx_b=cb*0.25+0.42;);gfx_a=1;
+  gfx_x=pad;gfx_y=note_y+nh_lo+12*sy;
+  gfx_printf("In: %d  |  Out: %d  |  Blocked: %d",notes_in|0,notes_out|0,notes_blocked|0);
+
+  // ── COURS-MAO.FR ───────────────────────────────────────────
+  gfx_setfont(1,"Arial",fs_info,0);
+  is_inv?(gfx_r=0.45;gfx_g=0.45;gfx_b=0.52;):(gfx_r=0.18;gfx_g=0.18;gfx_b=0.28;);gfx_a=1;
+  gfx_measurestr("cours-mao.fr",iw,ih);
+  gfx_x=gfx_w-pad*4-iw;gfx_y=gfx_h-ih-4*sy; gfx_drawstr("cours-mao.fr");
+
+  // ── SÉLECTEUR COULEUR ──────────────────────────────────────
+  sq_sz=max(8,(11*s)|0); sq_gap=max(2,(3*sx)|0);
+  sq_y=gfx_h-sq_sz-4*sy; sq_x0=pad;
+  ci=0;
+  loop(10,
+    sx_sq=sq_x0+ci*(sq_sz+sq_gap);
+    pr=pal[400+ci*3];pg=pal[401+ci*3];pb=pal[402+ci*3];
+    click&&mouse_x>=sx_sq&&mouse_x<=sx_sq+sq_sz&&mouse_y>=sq_y&&mouse_y<=sq_y+sq_sz?(
+      col_idx=ci; slider4=ci; slider_automate(8);
+    );
+    gfx_r=pr;gfx_g=pg;gfx_b=pb;gfx_a=1;gfx_rect(sx_sq,sq_y,sq_sz,sq_sz);
+    ci==col_idx?(
+      is_bw?(gfx_r=0.1;gfx_g=0.1;gfx_b=0.1;):(gfx_r=1;gfx_g=1;gfx_b=1;);
+    ):(
+      is_bw?(gfx_r=0.5;gfx_g=0.5;gfx_b=0.5;):(gfx_r=0.15;gfx_g=0.15;gfx_b=0.25;);
+    );gfx_a=1;
+    gfx_rect(sx_sq-1,sq_y-1,sq_sz+2,1);gfx_rect(sx_sq-1,sq_y+sq_sz,sq_sz+2,1);
+    gfx_rect(sx_sq-1,sq_y-1,1,sq_sz+2);gfx_rect(sx_sq+sq_sz,sq_y-1,1,sq_sz+2);
+    ci+=1;
+  );
+
+  // ── POIGNÉE RESIZE ─────────────────────────────────────────
+  is_inv?(gfx_r=0.35;gfx_g=0.35;gfx_b=0.45;):(gfx_r=0.28;gfx_g=0.28;gfx_b=0.45;);gfx_a=0.7;
+  grip_i=1;loop(3,o=grip_i*5*s;gfx_line(gfx_w-2-o,gfx_h-2,gfx_w-2,gfx_h-2-o,1);grip_i+=1;);
