@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<index version="1">
+  <category name="MIDI FX">
+    
+    <reapack name="JCFX MIDI Density" type="effect">
+      <version name="1.02" author="Fab">
+        <source file="midi_fx/midi_density.jsfx" />
+        <about>
+          MIDI density processor
+        </about>
+      </version>
+    </reapack>
+
+    <reapack name="JCFX MIDI Density Pro" type="effect">
+      <version name="1.0" author="Fab">
+        <source file="midi_fx/midi_density_pro.jsfx" />
+        <about>
+          Advanced MIDI density processor
+        </about>
+      </version>
+    </reapack>
+
+    <reapack name="JCFX MIDI Modifier" type="effect">
+      <version name="1.0" author="Fab">
+        <source file="midi_fx/midi_modifier.jsfx" />
+        <about>
+          MIDI modifier tool
+        </about>
+      </version>
+    </reapack>
+
+    <reapack name="JCFX MIDI Modifier GUI" type="effect">
+      <version name="0.8" author="Fab">
+        <source file="midi_fx/midi_modifier_gui.jsfx" />
+        <about>
+          MIDI modifier with graphical interface
+        </about>
+      </version>
+    </reapack>
+
+  </category>
+</index>
